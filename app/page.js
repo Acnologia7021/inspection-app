@@ -1,6 +1,5 @@
-// app/page.js
 import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  redirect("/login"); // automatically sends users to login
+  redirect("/login"); // automatically sends user to login page
 }

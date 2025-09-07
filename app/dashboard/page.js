@@ -1,257 +1,357 @@
 "use client";
-import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
-import { useRouter } from "next/navigation";
+
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import { Plus, Edit, Trash, Eye, X } from "lucide-react";
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [houses, setHouses] = useState([]);
-
-  // Modal states
-  const [houseModalOpen, setHouseModalOpen] = useState(false);
-  const [roomModalOpen, setRoomModalOpen] = useState(false);
-  const [inspectionModalOpen, setInspectionModalOpen] = useState(false);
-
-  // Form states
   const [newHouseName, setNewHouseName] = useState("");
-  const [newRoomName, setNewRoomName] = useState("");
-  const [selectedHouseForRoom, setSelectedHouseForRoom] = useState("");
-  const [selectedHouseId, setSelectedHouseId] = useState("");
-  const [selectedRoomId, setSelectedRoomId] = useState("");
-  const [status, setStatus] = useState("Pending");
-  const [notes, setNotes] = useState("");
-  const [files, setFiles] = useState([]);
+  const [selectedHouse, setSelectedHouse] = useState(null);
+  const [inspections, setInspections] = useState([]);
+  const [newInspection, setNewInspection] = useState({
+    room: "",
+    status: "pending",
+    remark: "",
+    imageFile: null,
+  });
+  const [editingInspection, setEditingInspection] = useState(null);
+  const [viewingImage, setViewingImage] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push("/login");
-      setUser(session.user);
+    loadHouses();
+  }, []);
+
+  useEffect(() => {
+    if (selectedHouse) loadInspections(selectedHouse.id);
+  }, [selectedHouse]);
+
+  async function loadHouses() {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("houses")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setHouses(data || []);
+    } catch (err) {
+      console.error("Error loading houses:", err);
+      alert("Failed to load houses");
+    } finally {
       setLoading(false);
-      loadHouses();
-    };
-
-    checkUser();
-  }, [router]);
-
-  const loadHouses = async () => {
-    const { data: housesData, error: housesError } = await supabase.from("houses").select("*");
-    if (housesError) {
-      console.error("Error loading houses:", housesError);
-      alert("Failed to load houses. Check console.");
-      return;
     }
+  }
 
-    const housesWithRooms = await Promise.all(
-      housesData.map(async (house) => {
-        const { data: roomsData, error: roomsError } = await supabase.from("rooms").select("*").eq("house_id", house.id);
-        if (roomsError) return { ...house, rooms: [] };
+  async function loadInspections(houseId) {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("inspections")
+        .select(`
+          id,
+          room,
+          status,
+          remark,
+          created_at,
+          inspection_images (
+            id,
+            image_url
+          )
+        `)
+        .eq("house_id", houseId)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setInspections(data || []);
+    } catch (err) {
+      console.error("Error loading inspections:", err);
+      alert("Failed to load inspections");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-        const roomsWithInspections = await Promise.all(
-          roomsData.map(async (room) => {
-            const { data: inspectionsData, error: inspError } = await supabase
-              .from("inspections")
-              .select(`*, inspection_images(url)`)
-              .eq("room_id", room.id)
-              .eq("inspector_id", user?.id);
-            if (inspError) return { ...room, inspections: [] };
-            return { ...room, inspections: inspectionsData || [] };
-          })
-        );
+  async function addHouse() {
+    if (!newHouseName.trim()) return alert("Enter a house name");
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("houses")
+        .insert([{ name: newHouseName.trim() }])
+        .select();
+      if (error) throw error;
+      setHouses([...data, ...houses]);
+      setNewHouseName("");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to add house");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-        return { ...house, rooms: roomsWithInspections };
-      })
-    );
-
-    setHouses(housesWithRooms);
-  };
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
-
-  const handleAddHouse = async () => {
-    if (!newHouseName) return alert("Enter house name");
-    const { error } = await supabase.from("houses").insert({ name: newHouseName });
-    if (error) return alert(error.message);
-    setNewHouseName("");
-    setHouseModalOpen(false);
-    loadHouses();
-  };
-
-  const handleAddRoom = async () => {
-    if (!selectedHouseForRoom || !newRoomName) return alert("Select house and enter room name");
-    const { error } = await supabase.from("rooms").insert({ house_id: selectedHouseForRoom, name: newRoomName });
-    if (error) return alert(error.message);
-    setNewRoomName("");
-    setSelectedHouseForRoom("");
-    setRoomModalOpen(false);
-    loadHouses();
-  };
-
-  const handleSaveInspection = async () => {
-    if (!selectedHouseId || !selectedRoomId) return alert("Select house and room");
-
-    const { data: inspection, error: inspError } = await supabase
-      .from("inspections")
-      .insert({ room_id: selectedRoomId, inspector_id: user.id, status, notes })
-      .select()
-      .single();
-
-    if (inspError) return alert("Failed to save inspection: " + inspError.message);
-
-    for (let file of files) {
-      const fileName = `${Date.now()}_${file.name}`;
-      const { data, error: uploadError } = await supabase.storage.from("inspection-images").upload(fileName, file);
-      if (uploadError) console.error("Upload error:", uploadError);
-      else {
-        const url = supabase.storage.from("inspection-images").getPublicUrl(fileName).data.publicUrl;
-        await supabase.from("inspection_images").insert({ inspection_id: inspection.id, url });
+  async function deleteHouse(houseId) {
+    if (!confirm("Are you sure?")) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase.from("houses").delete().eq("id", houseId);
+      if (error) throw error;
+      setHouses(houses.filter(h => h.id !== houseId));
+      if (selectedHouse?.id === houseId) {
+        setSelectedHouse(null);
+        setInspections([]);
       }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete house");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    setInspectionModalOpen(false);
-    setSelectedHouseId("");
-    setSelectedRoomId("");
-    setStatus("Pending");
-    setNotes("");
-    setFiles([]);
-    loadHouses();
+  async function addInspection() {
+    if (!selectedHouse) return alert("Select a house first");
+    if (!newInspection.room.trim()) return alert("Enter room name");
+    setLoading(true);
+    try {
+      const { room, status, remark, imageFile } = newInspection;
+      const { data: inspection, error } = await supabase
+        .from("inspections")
+        .insert([{ house_id: selectedHouse.id, room: room.trim(), status, remark: remark.trim() }])
+        .select()
+        .single();
+      if (error) throw error;
+
+      if (imageFile) {
+        const fileExt = imageFile.name.split(".").pop();
+        const filePath = `inspections/${inspection.id}-${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage.from("inspection-images").upload(filePath, imageFile);
+        if (!uploadError) {
+          await supabase.from("inspection_images").insert([{ inspection_id: inspection.id, image_url: filePath }]);
+        } else console.error(uploadError);
+      }
+
+      setNewInspection({ room: "", status: "pending", remark: "", imageFile: null });
+      setPreviewImage(null);
+      await loadInspections(selectedHouse.id);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to add inspection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const startEditingInspection = (inspection) => {
+    setEditingInspection({ ...inspection, imageFile: null });
+    const existingImageUrl = inspection.inspection_images?.[0]?.image_url;
+    if (existingImageUrl) {
+      const { data } = supabase.storage.from("inspection-images").getPublicUrl(existingImageUrl);
+      setPreviewImage(data.publicUrl);
+    } else {
+      setPreviewImage(null);
+    }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  async function updateInspection() {
+    if (!editingInspection) return;
+    setLoading(true);
+    try {
+      const { id, room, status, remark, imageFile } = editingInspection;
+      const { error: updateError } = await supabase
+        .from("inspections")
+        .update({ room: room.trim(), status, remark: remark.trim() })
+        .eq("id", id);
+      if (updateError) throw updateError;
+
+      if (imageFile) {
+        const fileExt = imageFile.name.split(".").pop();
+        const filePath = `inspections/${id}-${Date.now()}.${fileExt}`;
+        const { error: uploadError } = await supabase.storage.from("inspection-images").upload(filePath, imageFile);
+        if (!uploadError) {
+          const { data: existingImage } = await supabase
+            .from("inspection_images")
+            .select("*")
+            .eq("inspection_id", id)
+            .single()
+            .catch(() => ({ data: null }));
+          if (existingImage) {
+            await supabase.from("inspection_images").update({ image_url: filePath }).eq("inspection_id", id);
+          } else {
+            await supabase.from("inspection_images").insert([{ inspection_id: id, image_url: filePath }]);
+          }
+        } else console.error(uploadError);
+      }
+
+      setEditingInspection(null);
+      setPreviewImage(null);
+      await loadInspections(selectedHouse.id);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to update inspection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteInspection(inspectionId) {
+    if (!confirm("Are you sure?")) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase.from("inspections").delete().eq("id", inspectionId);
+      if (error) throw error;
+      await loadInspections(selectedHouse.id);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete inspection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleImageChange(e, isEditing = false) {
+    const file = e.target.files[0];
+    if (isEditing) {
+      setEditingInspection({ ...editingInspection, imageFile: file });
+    } else {
+      setNewInspection({ ...newInspection, imageFile: file });
+    }
+    setPreviewImage(file ? URL.createObjectURL(file) : null);
+  }
+
+  async function viewImage(imagePath) {
+    try {
+      const { data } = supabase.storage.from("inspection-images").getPublicUrl(imagePath);
+      setViewingImage(data.publicUrl);
+    } catch (err) {
+      console.error("Error loading image:", err);
+      alert("Failed to load image");
+    }
+  }
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "pending": return "bg-yellow-100 text-yellow-800";
+      case "ongoing": return "bg-blue-100 text-blue-800";
+      case "completed": return "bg-green-100 text-green-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <div>
-            <button onClick={handleSignOut} className="bg-red-500 text-white px-4 py-2 rounded mr-2">Sign Out</button>
-            <button onClick={() => setHouseModalOpen(true)} className="bg-green-600 text-white px-4 py-2 rounded mr-2">Add House</button>
-            <button onClick={() => setRoomModalOpen(true)} className="bg-yellow-600 text-white px-4 py-2 rounded mr-2">Add Room</button>
-            <button onClick={() => setInspectionModalOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded">Add Inspection</button>
+    <div className="container mx-auto p-6">
+      <h1 className="text-3xl font-bold mb-8">House Inspection Dashboard</h1>
+
+      {loading && <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"><div className="bg-white p-4 rounded-lg">Loading...</div></div>}
+
+      {/* Image Viewer Modal */}
+      {viewingImage && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="relative max-w-4xl max-h-full">
+            <button onClick={() => setViewingImage(null)} className="absolute -top-10 right-0 text-white hover:text-gray-300">
+              <X size={24} />
+            </button>
+            <img src={viewingImage} alt="Inspection" className="max-w-full max-h-full object-contain" />
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Houses Section */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Houses</h2>
+          <div className="flex gap-2 mb-4">
+            <input type="text" value={newHouseName} onChange={(e) => setNewHouseName(e.target.value)} placeholder="Enter house name" className="flex-1 px-3 py-2 border rounded-lg" onKeyPress={(e) => e.key === 'Enter' && addHouse()} />
+            <button onClick={addHouse} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"><Plus size={16}/>Add</button>
+          </div>
+          <div className="space-y-2">
+            {houses.map((house) => (
+              <div key={house.id} className={`p-3 border rounded-lg cursor-pointer flex items-center justify-between ${selectedHouse?.id === house.id ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-gray-300"}`} onClick={() => setSelectedHouse(house)}>
+                <span className="font-medium">{house.name}</span>
+                <button onClick={(e) => { e.stopPropagation(); deleteHouse(house.id); }} className="text-red-500 hover:text-red-700"><Trash size={16} /></button>
+              </div>
+            ))}
+            {houses.length === 0 && <p className="text-gray-500 text-center py-4">No houses added yet</p>}
           </div>
         </div>
 
-        {/* Houses List */}
-        {houses.length === 0 ? (
-          <p>No houses yet. Add some!</p>
-        ) : (
-          houses.map((house) => (
-            <div key={house.id} className="bg-white p-4 rounded mb-4 shadow">
-              <h2 className="font-bold text-lg">{house.name}</h2>
-              {house.rooms.length === 0 ? (
-                <p className="ml-4 text-gray-500">No rooms yet.</p>
-              ) : (
-                house.rooms.map((room) => (
-                  <div key={room.id} className="ml-4 mt-2">
-                    <h3 className="font-semibold">{room.name}</h3>
-                    {room.inspections.length === 0 ? (
-                      <p className="ml-2 text-sm text-gray-500">No inspections yet.</p>
-                    ) : (
-                      room.inspections.map((insp) => (
-                        <div key={insp.id} className="ml-2 text-sm border-b py-1">
-                          <p>Status: {insp.status}</p>
-                          <p>Notes: {insp.notes}</p>
-                          {insp.inspection_images?.map((img, i) => (
-                            <img key={i} src={img.url} className="w-20 h-20 mt-1 rounded" alt="inspection" />
-                          ))}
-                        </div>
-                      ))
-                    )}
+        {/* Inspections Section */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Inspections {selectedHouse && `- ${selectedHouse.name}`}</h2>
+
+          {selectedHouse ? (
+            <>
+              {/* Add New Inspection */}
+              {!editingInspection && (
+                <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                  <h3 className="font-medium mb-3">Add New Inspection</h3>
+                  <div className="space-y-3">
+                    <input type="text" value={newInspection.room} onChange={(e) => setNewInspection({ ...newInspection, room: e.target.value })} placeholder="Room name" className="w-full px-3 py-2 border rounded-lg" />
+                    <select value={newInspection.status} onChange={(e) => setNewInspection({ ...newInspection, status: e.target.value })} className="w-full px-3 py-2 border rounded-lg">
+                      <option value="pending">Pending</option>
+                      <option value="ongoing">Ongoing</option>
+                      <option value="completed">Completed</option>
+                    </select>
+                    <textarea value={newInspection.remark} onChange={(e) => setNewInspection({ ...newInspection, remark: e.target.value })} placeholder="Remarks (optional)" className="w-full px-3 py-2 border rounded-lg" rows="2" />
+                    <input type="file" accept="image/*" onChange={(e) => handleImageChange(e)} className="w-full px-3 py-2 border rounded-lg" />
+                    {previewImage && <div className="mt-2"><p className="text-sm text-gray-500">Preview:</p><img src={previewImage} alt="Preview" className="max-w-xs max-h-40 object-contain border rounded-lg mt-1" /></div>}
+                    <button onClick={addInspection} className="w-full px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center justify-center gap-2"><Plus size={16}/>Add Inspection</button>
                   </div>
-                ))
+                </div>
               )}
-            </div>
-          ))
-        )}
 
-        {/* Add House Modal */}
-        {houseModalOpen && (
-          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center">
-            <div className="bg-white p-6 rounded-xl shadow-lg w-96 space-y-4">
-              <h2 className="text-xl font-bold">Add House</h2>
-              <input
-                type="text"
-                placeholder="House Name"
-                className="w-full border p-2 rounded"
-                value={newHouseName}
-                onChange={(e) => setNewHouseName(e.target.value)}
-              />
-              <div className="flex justify-end gap-2 mt-4">
-                <button className="bg-gray-400 text-white px-4 py-2 rounded" onClick={() => setHouseModalOpen(false)}>Cancel</button>
-                <button className="bg-green-600 text-white px-4 py-2 rounded" onClick={handleAddHouse}>Save</button>
-              </div>
-            </div>
-          </div>
-        )}
+              {/* Edit Inspection Form */}
+              {editingInspection && (
+                <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+                  <h3 className="font-medium mb-3">Edit Inspection</h3>
+                  <div className="space-y-3">
+                    <input type="text" value={editingInspection.room} onChange={(e) => setEditingInspection({ ...editingInspection, room: e.target.value })} placeholder="Room name" className="w-full px-3 py-2 border rounded-lg" />
+                    <select value={editingInspection.status} onChange={(e) => setEditingInspection({ ...editingInspection, status: e.target.value })} className="w-full px-3 py-2 border rounded-lg">
+                      <option value="pending">Pending</option>
+                      <option value="ongoing">Ongoing</option>
+                      <option value="completed">Completed</option>
+                    </select>
+                    <textarea value={editingInspection.remark} onChange={(e) => setEditingInspection({ ...editingInspection, remark: e.target.value })} placeholder="Remarks (optional)" className="w-full px-3 py-2 border rounded-lg" rows="2" />
+                    <input type="file" accept="image/*" onChange={(e) => handleImageChange(e, true)} className="w-full px-3 py-2 border rounded-lg" />
+                    {previewImage && <div className="mt-2"><p className="text-sm text-gray-500">Preview:</p><img src={previewImage} alt="Preview" className="max-w-xs max-h-40 object-contain border rounded-lg mt-1" /></div>}
+                    <div className="flex gap-2">
+                      <button onClick={updateInspection} className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600">Update</button>
+                      <button onClick={() => { setEditingInspection(null); setPreviewImage(null); }} className="flex-1 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600">Cancel</button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-        {/* Add Room Modal */}
-        {roomModalOpen && (
-          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center">
-            <div className="bg-white p-6 rounded-xl shadow-lg w-96 space-y-4">
-              <h2 className="text-xl font-bold">Add Room</h2>
-              <select className="w-full border p-2 rounded" value={selectedHouseForRoom} onChange={(e) => setSelectedHouseForRoom(e.target.value)}>
-                <option value="">Select House</option>
-                {houses.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-              </select>
-              <input
-                type="text"
-                placeholder="Room Name"
-                className="w-full border p-2 rounded"
-                value={newRoomName}
-                onChange={(e) => setNewRoomName(e.target.value)}
-              />
-              <div className="flex justify-end gap-2 mt-4">
-                <button className="bg-gray-400 text-white px-4 py-2 rounded" onClick={() => setRoomModalOpen(false)}>Cancel</button>
-                <button className="bg-yellow-600 text-white px-4 py-2 rounded" onClick={handleAddRoom}>Save</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Add Inspection Modal */}
-        {inspectionModalOpen && (
-          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center">
-            <div className="bg-white p-6 rounded-xl shadow-lg w-96 space-y-2">
-              <h2 className="text-xl font-bold mb-2">Add Inspection</h2>
-
-              <select value={selectedHouseId} onChange={(e) => setSelectedHouseId(e.target.value)} className="w-full border p-2 rounded mb-2">
-                <option value="">Select House</option>
-                {houses.map((h) => (
-                  <option key={h.id} value={h.id}>{h.name}</option>
+              {/* Inspections List */}
+              <div className="space-y-3">
+                {inspections.map((inspection) => (
+                  <div key={inspection.id} className="p-4 border rounded-lg">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <h4 className="font-medium">{inspection.room}</h4>
+                        <span className={`inline-block px-2 py-1 rounded-full text-xs ${getStatusColor(inspection.status)}`}>{inspection.status}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        {inspection.inspection_images?.length > 0 && (
+                          <button onClick={() => viewImage(inspection.inspection_images[0].image_url)} className="text-blue-500 hover:text-blue-700"><Eye size={16}/></button>
+                        )}
+                        <button onClick={() => startEditingInspection(inspection)} className="text-blue-500 hover:text-blue-700"><Edit size={16}/></button>
+                        <button onClick={() => deleteInspection(inspection.id)} className="text-red-500 hover:text-red-700"><Trash size={16}/></button>
+                      </div>
+                    </div>
+                    {inspection.remark && <p className="text-gray-600 text-sm mt-2">{inspection.remark}</p>}
+                    <p className="text-gray-400 text-xs mt-2">{new Date(inspection.created_at).toLocaleDateString()}</p>
+                  </div>
                 ))}
-              </select>
-
-              <select value={selectedRoomId} onChange={(e) => setSelectedRoomId(e.target.value)} className="w-full border p-2 rounded mb-2">
-                <option value="">Select Room</option>
-                {houses.find((h) => h.id === selectedHouseId)?.rooms.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
-
-              <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full border p-2 rounded mb-2">
-                <option value="Pending">Pending</option>
-                <option value="Completed">Completed</option>
-              </select>
-
-              <textarea placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border p-2 rounded mb-2" />
-
-              <input type="file" multiple capture="environment" onChange={(e) => setFiles([...e.target.files])} className="mb-2" />
-
-              <div className="flex justify-end gap-2 mt-4">
-                <button className="bg-gray-400 text-white px-4 py-2 rounded" onClick={() => setInspectionModalOpen(false)}>Cancel</button>
-                <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={handleSaveInspection}>Save</button>
+                {inspections.length === 0 && <p className="text-gray-500 text-center py-4">No inspections for this house yet</p>}
               </div>
-            </div>
-          </div>
-        )}
-
+            </>
+          ) : (
+            <p className="text-gray-500 text-center py-8">Please select a house to view inspections</p>
+          )}
+        </div>
       </div>
     </div>
   );
